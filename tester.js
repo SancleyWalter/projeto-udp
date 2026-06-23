@@ -4,160 +4,167 @@ const SERVER_PORT = 5000;
 const SERVER_HOST = "localhost";
 
 function createClient() {
-  // Cria o socket UDP para o cliente
-  return dgram.createSocket("udp4");
-}
-
-// Em UDP não há handshake de conexão, então validamos se o servidor responde a um comando simples
-function pingServer(socket, timeoutMs = 3000) {
-  return new Promise((resolve, reject) => {
-    const message = Buffer.from(JSON.stringify({ event: "get_world_cup_matches", payload: {} }));
-    
-    const onMessage = (msg) => {
-      try {
-        const data = JSON.parse(msg.toString());
-        if (data.event === "world_cup_matches_response") {
-          cleanup();
-          resolve();
-        }
-      } catch (err) {}
-    };
-
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("Não foi possível obter resposta do servidor UDP dentro do tempo limite. O servidor está rodando?"));
-    }, timeoutMs);
-
-    function cleanup() {
-      clearTimeout(timeout);
-      socket.removeListener("message", onMessage);
-    }
-
-    socket.on("message", onMessage);
-    socket.send(message, SERVER_PORT, SERVER_HOST);
-  });
+    return dgram.createSocket("udp4");
 }
 
 function requestGameResult(socket, gameName) {
-  return new Promise((resolve, reject) => {
-    const message = Buffer.from(JSON.stringify({ event: "get_game_result", payload: { game_name: gameName } }));
+    return new Promise((resolve, reject) => {
 
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("Tempo limite aguardando resposta do servidor."));
-    }, 5000);
+        const message = Buffer.from(JSON.stringify({
+            event: "get_game_result",
+            payload: {
+                game_name: gameName
+            }
+        }));
 
-    const onResponse = (msg) => {
-      try {
-        const data = JSON.parse(msg.toString());
-        if (data.event === "game_result_response") {
-          cleanup();
-          resolve(data.payload);
-        }
-      } catch (err) {}
-    };
-
-    function cleanup() {
-      clearTimeout(timeout);
-      socket.removeListener("message", onResponse);
-    }
-
-    socket.on("message", onResponse);
-    socket.send(message, SERVER_PORT, SERVER_HOST, (err) => {
-      if (err) {
-        cleanup();
-        reject(err);
-      }
-    });
-  });
-}
-
-async function testSequentialCommunication(socket) {
-  console.log("\nTeste 1 - Comunicação Sequencial Iniciada...");
-
-  const r1 = await requestGameResult(socket, "Brasil x Marrocos");
-  console.log("Resposta para 'Brasil x Marrocos':", r1.result);
-
-  const r2 = await requestGameResult(socket, "Argentina x França");
-  console.log("Resposta para 'Argentina x França':", r2.result);
-
-  const r3 = await requestGameResult(socket, "TimeInexistente x Outro");
-  console.log("Resposta para jogo inexistente:", r3.result);
-}
-
-async function testBurstRequests(socket) {
-  console.log("\nTeste 2 - Volume de Requisições (Burst) Iniciado...");
-  
-  const totalRequests = 100;
-  let receivedResponses = 0;
-
-  const responsesPromise = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error(`Tempo limite aguardando o lote de respostas. Recebidas: ${receivedResponses}/${totalRequests}`));
-    }, 10000);
-
-    const onResponse = (msg) => {
-      try {
-        const data = JSON.parse(msg.toString());
-        if (data.event === "game_result_response") {
-          receivedResponses += 1;
-          if (receivedResponses === totalRequests) {
+        const timeout = setTimeout(() => {
             cleanup();
-            resolve();
-          }
-        }
-      } catch (err) {}
-    };
+            reject(new Error("Tempo limite."));
+        }, 5000);
 
-    function cleanup() {
-      clearTimeout(timeout);
-      socket.removeListener("message", onResponse);
+        function onMessage(msg) {
+
+            try {
+
+                const data = JSON.parse(msg.toString());
+
+                if (data.event === "game_result_response") {
+                    cleanup();
+                    resolve(data.payload);
+                }
+
+            } catch (e) {}
+
+        }
+
+        function cleanup() {
+            clearTimeout(timeout);
+            socket.removeListener("message", onMessage);
+        }
+
+        socket.on("message", onMessage);
+
+        socket.send(message, SERVER_PORT, SERVER_HOST);
+
+    });
+}
+
+// =======================
+// TESTE 1
+// =======================
+
+async function test1(socket) {
+
+    console.log("\n==============================");
+    console.log("TESTE 1 - Comunicação Básica");
+    console.log("==============================");
+
+    let respostasRecebidas = 0;
+    let somaTempos = 0;
+
+    for (let i = 1; i <= 10; i++) {
+
+        const inicio = Date.now();
+
+        try {
+
+            await requestGameResult(socket, "Brasil x Marrocos");
+
+            const fim = Date.now();
+
+            respostasRecebidas++;
+            somaTempos += (fim - inicio);
+
+            console.log(`Consulta ${i}: OK (${fim - inicio} ms)`);
+
+        } catch (err) {
+
+            console.log(`Consulta ${i}: Falhou`);
+
+        }
+
     }
 
-    socket.on("message", onResponse);
-  });
+    console.log("\nResultado do Teste 1");
 
-  const startTime = Date.now();
+    console.log("Respostas recebidas:", respostasRecebidas);
 
-  for (let index = 0; index < totalRequests; index += 1) {
-    const message = Buffer.from(JSON.stringify({
-      event: "get_game_result",
-      payload: {
-        game_name: index % 2 === 0 ? "Brasil x Marrocos" : "Argentina x França",
-      }
-    }));
-    
-    socket.send(message, SERVER_PORT, SERVER_HOST);
-  }
+    if (respostasRecebidas > 0) {
 
-  await responsesPromise;
-  const totalElapsed = Date.now() - startTime;
+        console.log(
+            "Tempo médio:",
+            (somaTempos / respostasRecebidas).toFixed(2),
+            "ms"
+        );
 
-  console.log("Teste 2 - Concluído com sucesso!");
-  console.log(`Tempo total do lote: ${totalElapsed} ms`);
-  console.log(`Quantidade total de respostas recebidas: ${receivedResponses}`);
+    }
+
 }
+
+// =======================
+// TESTE 2
+// =======================
+
+async function test2(socket) {
+
+    console.log("\n==============================");
+    console.log("TESTE 2 - Volume de Requisições");
+    console.log("==============================");
+
+    const TOTAL = 100;
+
+    let respostasRecebidas = 0;
+
+    const inicio = Date.now();
+
+    await Promise.all(
+
+        Array.from({ length: TOTAL }, async () => {
+
+            try {
+
+                await requestGameResult(socket, "Brasil x Marrocos");
+
+                respostasRecebidas++;
+
+            } catch (e) {}
+
+        })
+
+    );
+
+    const fim = Date.now();
+
+    console.log("\nResultado do Teste 2");
+
+    console.log("Tempo total:", fim - inicio, "ms");
+
+    console.log("Respostas recebidas:", respostasRecebidas);
+
+}
+
+// =======================
 
 async function main() {
-  const socket = createClient();
 
-  try {
-    console.log("Verificando disponibilidade do servidor UDP...");
-    await pingServer(socket);
-    console.log("Servidor respondendo normalmente. Iniciando bateria de testes.");
+    const socket = createClient();
 
-    await testSequentialCommunication(socket);
-    await testBurstRequests(socket);
+    try {
 
-    console.log("\nTodos os testes foram concluídos!");
-  } catch (error) {
-    console.error("\nFalha durante a execução dos testes:", error.message);
-  } finally {
-    socket.close();
-  }
+        await test1(socket);
+
+        await test2(socket);
+
+    } catch (err) {
+
+        console.error(err);
+
+    } finally {
+
+        socket.close();
+
+    }
+
 }
 
-main().catch((error) => {
-  console.error("Erro inesperado no executor principal:", error);
-});
+main();
